@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Centro de Descarga Giffany</title>
+  <style>
+    :root { --primary-color: #F64AE4; --bg-color: #111; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Montserrat', sans-serif; background: var(--bg-color); color: #FFF; }
+    .top-bar { display: flex; align-items: center; background: var(--bg-color); padding: 10px 14px; }
+    .top-bar h1 { font-size: 16px; font-weight: bold; color: var(--primary-color); text-transform: uppercase; }
+    .container { padding: 12px; }
+    .input-field { width: 100%; padding: 10px; background: #1c1b24; border: 2px solid var(--primary-color); border-radius: 8px; color: #FFF; margin-bottom: 8px; font-size: 14px; }
+    .buttons { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .buttons .row { display: flex; gap: 6px; }
+    .buttons button { flex: 1; padding: 8px; background: #121119; border: 2px solid var(--primary-color); border-radius: 8px; color: var(--primary-color); font-size: 13px; cursor: pointer; text-transform: uppercase; font-weight: bold; }
+    .buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    .gallery img {
+      width: 100%;
+      aspect-ratio: 3/4;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 2px solid #333;
+    }
+    .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); color: white; display: none; flex-direction: column; justify-content: center; align-items: center; font-size: 18px; font-weight: bold; z-index: 9999; gap: 8px; }
+    .overlay span { display: block; }
+    .progress-bar { width: 80%; height: 10px; background: #333; border-radius: 5px; overflow: hidden; margin-top: 8px; }
+    .progress-bar-fill { height: 100%; background: var(--primary-color); width: 0%; transition: width 0.2s ease; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.7.1/dist/jszip.min.js"></script>
+</head>
+<body>
+  <div class="overlay" id="overlay">
+    <span id="overlayCount">0/0 imágenes</span>
+    <span id="overlayLabel"></span>
+    <div class="progress-bar"><div id="progressBarFill" class="progress-bar-fill"></div></div>
+  </div>
+
+  <header class="top-bar">
+    <h1>CENTRO DE DESCARGA DE GIFFANY</h1>
+  </header>
+
+  <main class="container">
+    <textarea id="encryptedLinks" class="input-field" rows="4" placeholder="Pega aquí los enlaces cifrados..."></textarea>
+    <div class="buttons">
+      <button id="decryptBtn">Desencriptar</button>
+      <div class="row">
+        <button id="downloadPdfBtn" disabled>Descargar PDF</button>
+        <button id="downloadZipBtn" disabled>Descargar .Zip</button>
+      </div>
+    </div>
+    <div id="imageGallery" class="gallery"></div>
+  </main>
+
+  <script>
+    let imageUrls = [];
+    let userName = '';  // guardamos aquí el nombre extraído
+
+    const { jsPDF } = window.jspdf;
+    const JSZip = window.JSZip;
+
+    // Función para formatear: elimina guiones bajos, pasa a minúsculas y capitaliza la primera letra
+    function formatFileName(name) {
+      const withSpaces = name.replace(/_/g, ' ');
+      const lower = withSpaces.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    }
+
+    // 1) Desencriptar y extraer name + URLs
+    document.getElementById('decryptBtn').addEventListener('click', () => {
+      const data = document.getElementById('encryptedLinks').value.trim();
+      const gallery = document.getElementById('imageGallery');
+      gallery.innerHTML = '';
+      try {
+        const parsed = JSON.parse(atob(data));
+        userName = parsed.name.trim();    // recogemos el nombre crudo
+        imageUrls = parsed.urls || [];
+
+        // mostrar imágenes
+        imageUrls.forEach(src => {
+          const img = document.createElement('img');
+          img.src = src;
+          gallery.appendChild(img);
+        });
+
+        // habilitar botones
+        const hasImages = imageUrls.length > 0;
+        document.getElementById('downloadPdfBtn').disabled = !hasImages;
+        document.getElementById('downloadZipBtn').disabled = !hasImages;
+      } catch {
+        alert('Formato de datos inválido');
+      }
+    });
+
+    function showOverlay(label) {
+      document.getElementById('overlayLabel').textContent = label;
+      updateOverlay(0, imageUrls.length);
+      document.getElementById('overlay').style.display = 'flex';
+    }
+    function hideOverlay() {
+      document.getElementById('overlay').style.display = 'none';
+    }
+    function updateOverlay(current, total) {
+      document.getElementById('overlayCount').textContent = `${current}/${total} imágenes`;
+      document.getElementById('progressBarFill').style.width = `${(current/total)*100}%`;
+    }
+
+    async function fetchImages(updateProgress) {
+      const blobs = [];
+      for (let i = 0; i < imageUrls.length; i++) {
+        const proxy = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(imageUrls[i])}`;
+        const res = await fetch(proxy);
+        const blob = await res.blob();
+        blobs.push({ blob, name: imageUrls[i].split('/').pop() });
+        updateProgress(i + 1, imageUrls.length);
+      }
+      return blobs;
+    }
+
+    function blobToDataURL(blob) {
+      return new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    // 2) Descargar como PDF con nombre formateado
+    document.getElementById('downloadPdfBtn').addEventListener('click', async () => {
+      const fileName = formatFileName(userName || 'Download');
+      showOverlay('Descargando PDF...');
+      const blobs = await fetchImages(updateOverlay);
+      let pdf;
+      for (let i = 0; i < blobs.length; i++) {
+        const imgBlob = blobs[i].blob;
+        const imgEl = new Image();
+        imgEl.src = URL.createObjectURL(imgBlob);
+        await imgEl.decode();
+        const w = imgEl.naturalWidth;
+        const h = imgEl.naturalHeight;
+        if (i === 0) {
+          pdf = new jsPDF({ unit: 'px', format: [w, h] });
+        } else {
+          pdf.addPage([w, h], 'px');
+        }
+        const dataUrl = await blobToDataURL(imgBlob);
+        pdf.addImage(dataUrl, 'JPEG', 0, 0, w, h);
+        updateOverlay(i + 1, blobs.length);
+      }
+      pdf.save(`${fileName}.pdf`);
+      hideOverlay();
+    });
+
+    // 3) Descargar como ZIP con nombre formateado
+    document.getElementById('downloadZipBtn').addEventListener('click', async () => {
+      const fileName = formatFileName(userName || 'Download');
+      showOverlay('Descargando .Zip...');
+      const zip = new JSZip();
+      const blobs = await fetchImages(updateOverlay);
+      blobs.forEach(({ blob, name }) => zip.file(name, blob));
+      const content = await zip.generateAsync({ type: 'blob' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(content);
+      link.download = `${fileName}.zip`;
+      link.click();
+      hideOverlay();
+    });
+  </script>
+</body>
+</html>
